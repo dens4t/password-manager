@@ -1,0 +1,10 @@
+tunnel: securepass-fm
+credentials-file: /home/densat/.cloudflared/securepass-fm.json
+originCert: /home/densat/.cloudflared/cert.pem.backup
+
+ingress:
+  - hostname: fm.dst.my.id
+    service: http://localhost:18080
+  - hostname: www.fm.dst.my.id
+    service: http://localhost:18080
+  - service: http_status:404

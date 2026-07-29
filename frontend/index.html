@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SecurePass - Password Manager</title>
+    <link rel="stylesheet" href="/styles.css">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔐</text></svg>">
+    <style>
+        /* Additional inline styles for immediate loading */
+        body { margin: 0; padding: 0; min-height: 100vh; }
+        .loading-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: linear-gradient(135deg, #5D3FD3 0%, #00A886 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 9999;
+            transition: opacity 0.3s ease-out;
+        }
+        .loading-screen.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        .loading-logo {
+            animation: pulse 2s infinite;
+        }
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+        }
+    </style>
+</head>
+<body>
+    <div class="loading-screen" id="loading-screen">
+        <div class="loading-logo">
+            <div style="width: 80px; height: 80px; background: white; border-radius: 16px; display: flex; align-items: center; justify-content: center; font-size: 32px; font-weight: bold; color: #5D3FD3;">
+                🔐
+            </div>
+        </div>
+    </div>
+
+    <div id="app"></div>
+
+    <script>
+        // Main application state
+        const AppState = {
+            currentUser: null,
+            passwords: [],
+            isLoggedIn: false,
+            currentView: 'auth'
+        };
+
+        // API Configuration
+        const API_BASE = window.location.origin;
+
+        // Utility functions
+        function showLoading() {
+            document.getElementById('loading-screen').classList.remove('hidden');
+        }
+
+        function hideLoading() {
+            setTimeout(() => {
+                document.getElementById('loading-screen').classList.add('hidden');
+            }, 300);
+        }
+
+        function showToast(message, type = 'info') {
+            const container = document.getElementById('toast-container') || createToastContainer();
+            const toast = document.createElement('div');
+            toast.className = `toast toast-${type}`;
+            toast.innerHTML = `
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                    <div class="toast-icon">${getToastIcon(type)}</div>
+                    <div>${message}</div>
+                </div>
+            `;
+            container.appendChild(toast);
+            
+            setTimeout(() => {
+                toast.style.animation = 'slideIn 0.3s ease-out reverse';
+                setTimeout(() => toast.remove(), 300);
+            }, 3000);
+        }
+
+        function getToastIcon(type) {
+            const icons = {
+                success: '✅',
+                error: '❌',
+                info: 'ℹ️',
+                warning: '⚠️'
+            };
+            return icons[type] || icons.info;
+        }
+
+        function createToastContainer() {
+            const container = document.createElement('div');
+            container.id = 'toast-container';
+            container.className = 'toast-container';
+            document.body.appendChild(container);
+            return container;
+        }
+
+        // Auth functions
+        async function login(username, password) {
+            try {
+                showLoading();
+                const response = await fetch(`${API_BASE}/api/auth/login`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({username, password})
+                });
+                
+                const data = await response.json();
+                hideLoading();
+                
+                if (response.ok) {
+                    localStorage.setItem('token', data.token);
+                    AppState.isLoggedIn = true;
+                    showToast('Login successful', 'success');
+                    renderDashboard();
+                } else {
+                    showToast(data.error || 'Login failed', 'error');
+                }
+            } catch (error) {
+                hideLoading();
+                showToast('Network error', 'error');
+            }
+        }
+
+        async function register(username, password) {
+            try {
+                showLoading();
+                const response = await fetch(`${API_BASE}/api/auth/register`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({username, password})
+                });
+                
+                const data = await response.json();
+                hideLoading();
+                
+                if (response.ok) {
+                    showToast('Registration successful! Please login.', 'success');
+                    switchToLogin();
+                } else {
+                    showToast(data.error || 'Registration failed', 'error');
+                }
+            } catch (error) {
+                hideLoading();
+                showToast('Network error', 'error');
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            AppState.isLoggedIn = false;
+            AppState.currentUser = null;
+            AppState.passwords = [];
+            showToast('Logged out', 'info');
+            renderAuth();
+        }
+
+        // Password management
+        async function loadPasswords() {
+            try {
+                const token = localStorage.getItem('token');
+                if (!token) return [];
+                
+                const response = await fetch(`${API_BASE}/api/passwords`, {
+                    headers: {'Authorization': `Bearer ${token}`}
+                });
+                
+                if (response.ok) {
+                    const passwords = await response.json();
+                    AppState.passwords = passwords;
+                    return passwords;
+                }
+            } catch (error) {
+                console.error('Failed to load passwords:', error);
+            }
+            return [];
+        }
+
+        async function savePassword(passwordData) {
+            try {
+                const token = localStorage.getItem('token');
+                const response = await fetch(`${API_BASE}/api/passwords`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${token}`
+                    },
+                    body: JSON.stringify(passwordData)
+                });
+                
+                if (response.ok) {
+                    showToast('Password saved', 'success');
+                    await loadPasswords();
+                    renderDashboard();
+                    return true;
+                } else {
+                    showToast('Failed to save password', 'error');
+                }
+            } catch (error) {
+                showToast('Network error', 'error');
+            }
+            return false;
+        }
+
+        // UI Rendering
+        function renderAuth() {
+            const app = document.getElementById('app');
+            app.innerHTML = `
+                <div class="auth-page">
+                    <div class="auth-container">
+                        <div class="auth-card">
+                            <div class="logo">
+                                <div class="logo-icon">🔐</div>
+                                <h1>SecurePass</h1>
+                                <p class="text-muted">Your passwords, secured</p>
+                            </div>
+                            
+                            <div class="tabs mb-6" id="auth-tabs">
+                                <button class="tab active" data-tab="login">Sign In</button>
+                                <button class="tab" data-tab="register">Create Account</button>
+                            </div>
+                            
+                            <div id="login-form">
+                                <form id="login-form-element" class="auth-form">
+                                    <div class="form-group">
+                                        <label for="username">Email or username</label>
+                                        <div class="input-group">
+                                            <input type="text" id="username" class="form-control" placeholder="you@example.com" required>
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="password">Master password</label>
+                                        <div class="input-group">
+                                            <input type="password" id="password" class="form-control" placeholder="Enter your master password" required>
+                                            <button type="button" class="input-icon" onclick="togglePasswordVisibility('password')">👁️</button>
+                                        </div>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary btn-block mt-6">Sign In</button>
+                                </form>
+                            </div>
+                            
+                            <div id="register-form" style="display: none;">
+                                <form id="register-form-element" class="auth-form">
+                                    <div class="form-group">
+                                        <label for="reg-username">Email or username</label>
+                                        <input type="text" id="reg-username" class="form-control" placeholder="you@example.com" required>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="reg-password">Master password</label>
+                                        <div class="input-group">
+                                            <input type="password" id="reg-password" class="form-control" placeholder="Create a strong master password" required>
+                                            <button type="button" class="input-icon" onclick="togglePasswordVisibility('reg-password')">👁️</button>
+                                        </div>
+                                        <div class="strength-meter mt-2">
+                                            <div class="strength-fill" id="password-strength"></div>
+                                        </div>
+                                    </div>
+                                    <div class="form-group">
+                                        <label for="reg-confirm">Confirm password</label>
+                                        <input type="password" id="reg-confirm" class="form-control" placeholder="Confirm your master password" required>
+                                    </div>
+                                    <div class="flex items-center gap-2 mb-4">
+                                        <button type="button" class="btn btn-outline btn-sm" onclick="generatePassword()">Generate Strong Password</button>
+                                        <div class="text-sm text-muted">Use our secure generator</div>
+                                    </div>
+                                    <button type="submit" class="btn btn-primary btn-block">Create Account</button>
+                                </form>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Setup tab switching
+            document.querySelectorAll('[data-tab]').forEach(tab => {
+                tab.addEventListener('click', function() {
+                    document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+                    this.classList.add('active');
+                    
+                    const tabName = this.dataset.tab;
+                    document.getElementById('login-form').style.display = tabName === 'login' ? 'block' : 'none';
+                    document.getElementById('register-form').style.display = tabName === 'register' ? 'block' : 'none';
+                });
+            });
+            
+            // Form submissions
+            document.getElementById('login-form-element').addEventListener('submit', function(e) {
+                e.preventDefault();
+                const username = document.getElementById('username').value;
+                const password = document.getElementById('password').value;
+                login(username, password);
+            });
+            
+            document.getElementById('register-form-element').addEventListener('submit', function(e) {
+                e.preventDefault();
+                const username = document.getElementById('reg-username').value;
+                const password = document.getElementById('reg-password').value;
+                const confirm = document.getElementById('reg-confirm').value;
+                
+                if (password !== confirm) {
+                    showToast('Passwords do not match', 'error');
+                    return;
+                }
+                
+                register(username, password);
+            });
+            
+            // Password strength indicator
+            document.getElementById('reg-password')?.addEventListener('input', updatePasswordStrength);
+        }
+
+        function renderDashboard() {
+            const app = document.getElementById('app');
+            app.innerHTML = `
+                <div class="navbar">
+                    <div class="container">
+                        <div class="navbar-container">
+                            <a href="#" class="navbar-brand" onclick="renderDashboard(); return false;">
+                                <div class="brand-icon">🔐</div>
+                                <div class="brand-text">SecurePass</div>
+                            </a>
+                            
+                            <div class="navbar-actions">
+                                <div class="search-box">
+                                    <input type="text" class="form-control search-input" placeholder="Search passwords...">
+                                </div>
+                                
+                                <div class="user-menu" id="user-menu">
+                                    <div class="user-avatar">${getInitials()}</div>
+                                    <div class="user-info">
+                                        <div class="user-name">My Account</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="container">
+                    <div class="main-content">
+                        <div class="page-header">
+                            <h1 class="page-title">Your Passwords</h1>
+                            <p class="page-description">Secure, organized, and always accessible</p>
+                        </div>
+                        
+                        <div class="stats-grid">
+                            <div class="stat-card">
+                                <div class="stat-value" id="total-passwords">0</div>
+                                <div class="stat-label">Total Passwords</div>
+                                <div class="stat-change">+0 this week</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value">0</div>
+                                <div class="stat-label">Weak Passwords</div>
+                                <div class="stat-change">Needs attention</div>
+                            </div>
+                            <div class="stat-card">
+                                <div class="stat-value">0 days</div>
+                                <div class="stat-label">Last Updated</div>
+                                <div class="stat-change">Recently active</div>
+                            </div>
+                        </div>
+                        
+                        <div class="actions-bar">
+                            <button class="btn btn-primary" onclick="showAddPasswordModal()">
+                                <span>+</span>
+                                <span>Add Password</span>
+                            </button>
+                            
+                            <div class="flex gap-2">
+                                <button class="btn btn-outline" onclick="exportPasswords()">Export</button>
+                                <button class="btn btn-outline" onclick="showImportModal()">Import</button>
+                            </div>
+                        </div>
+                        
+                        <div class="password-grid" id="password-list">
+                            <div class="empty-state">
+                                <div class="empty-icon">🔐</div>
+                                <h3>No passwords yet</h3>
+                                <p class="text-muted mt-2">Add your first password to get started</p>
+                                <button class="btn btn-primary mt-4" onclick="showAddPasswordModal()">Add Your First Password</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Add Password Modal -->
+                <div class="modal-overlay" id="add-password-modal" style="display: none;">
+                    <div class="modal">
+                        <div class="modal-header">
+                            <h3 class="modal-title">Add Password</h3>
+                            <button class="modal-close" onclick="hideModal('add-password-modal')">×</button>
+                        </div>
+                        <div class="modal-body">
+                            <form id="add-password-form">
+                                <div class="form-group">
+                                    <label for="add-title">Title</label>
+                                    <input type="text" id="add-title" class="form-control" placeholder="e.g., Google Account" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="add-username">Username or Email</label>
+                                    <input type="text" id="add-username" class="form-control" placeholder="you@example.com" required>
+                                </div>
+                                <div class="form-group">
+                                    <label for="add-password">Password</label>
+                                    <div class="input-group">
+                                        <input type="password" id="add-password" class="form-control" placeholder="Enter password" required>
+                                        <button type="button" class="input-icon" onclick="togglePasswordVisibility('add-password')">👁️</button>
+                                    </div>
+                                </div>
+                                <div class="form-group">
+                                    <label for="add-url">Website URL (optional)</label>
+                                    <input type="url" id="add-url" class="form-control" placeholder="https://example.com">
+                                </div>
+                                <div class="form-group">
+                                    <label for="add-notes">Notes (optional)</label>
+                                    <textarea id="add-notes" class="form-control" rows="3" placeholder="Additional information"></textarea>
+                                </div>
+                            </form>
+                        </div>
+                        <div class="modal-footer">
+                            <button class="btn btn-outline" onclick="hideModal('add-password-modal')">Cancel</button>
+                            <button class="btn btn-primary" onclick="submitAddPassword()">Save Password</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- User Menu Dropdown -->
+                <div class="modal-overlay" id="user-menu-dropdown" style="display: none;">
+                    <div class="modal" style="max-width: 300px; position: absolute; top: 70px; right: 20px;">
+                        <div class="modal-body">
+                            <div class="flex flex-col gap-2">
+                                <button class="btn btn-outline btn-block" onclick="showSettings()">Settings</button>
+                                <button class="btn btn-outline btn-block" onclick="exportPasswords()">Export All</button>
+                                <div class="border-t border-gray-200 my-2"></div>
+                                <button class="btn btn-danger btn-block" onclick="logout()">Sign Out</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Load passwords
+            loadPasswords().then(passwords => {
+                updatePasswordList(passwords);
+                document.getElementById('total-passwords').textContent = passwords.length;
+            });
+            
+            // Setup user menu
+            document.getElementById('user-menu').addEventListener('click', function() {
+                const modal = document.getElementById('user-menu-dropdown');
+                modal.style.display = 'flex';
+            });
+            
+            // Close dropdown when clicking outside
+            document.getElementById('user-menu-dropdown').addEventListener('click', function(e) {
+                if (e.target === this) {
+                    this.style.display = 'none';
+                }
+            });
+        }
+
+        function updatePasswordList(passwords) {
+            const container = document.getElementById('password-list');
+            if (!container) return;
+            
+            if (passwords.length === 0) {
+                container.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">🔐</div>
+                        <h3>No passwords yet</h3>
+                        <p class="text-muted mt-2">Add your first password to get started</p>
+                        <button class="btn btn-primary mt-4" onclick="showAddPasswordModal()">Add Your First Password</button>
+                    </div>
+                `;
+                return;
+            }
+            
+            container.innerHTML = passwords.map(pass => `
+                <div class="password-card">
+                    <div class="password-header">
+                        <div class="password-favicon">${getFavicon(pass.url)}</div>
+                        <div class="password-title">${escapeHtml(pass.title)}</div>
+                        <div class="password-actions">
+                            <button class="copy-btn" onclick="copyToClipboard('${escapeHtml(pass.username)}', 'username')" title="Copy username">👤</button>
+                            <button class="copy-btn" onclick="copyToClipboard('${escapeHtml(pass.password === '********' ? 'Click to view' : pass.password)}', 'password')" title="Copy password">🔒</button>
+                        </div>
+                    </div>
+                    <div class="password-content">
+                        <div class="password-field">
+                            <div class="field-label">Username</div>
+                            <div class="field-value">
+                                <span>${escapeHtml(pass.username)}</span>
+                                <button class="copy-btn" onclick="copyToClipboard('${escapeHtml(pass.username)}', 'username')">📋</button>
+                            </div>
+                        </div>
+                        <div class="password-field">
+                            <div class="field-label">Password</div>
+                            <div class="field-value">
+                                <span>${pass.password === '********' ? '********' : '••••••••'}</span>
+                                <button class="copy-btn" onclick="copyToClipboard('${pass.password === '********' ? '' : escapeHtml(pass.password)}', 'password')">📋</button>
+                            </div>
+                        </div>
+                        ${pass.url ? `
+                        <div class="password-field">
+                            <div class="field-label">Website</div>
+                            <div class="field-value">
+                                <a href="${escapeHtml(pass.url)}" target="_blank" style="color: var(--primary); text-decoration: none;">${escapeHtml(pass.url)}</a>
+                            </div>
+                        </div>
+                        ` : ''}
+                        ${pass.notes ? `
+                        <div class="password-field">
+                            <div class="field-label">Notes</div>
+                            <div class="field-value">
+                                <span>${escapeHtml(pass.notes)}</span>
+                            </div>
+                        </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        // Helper functions
+        function getInitials() {
+            return 'U';
+        }
+
+        function getFavicon(url) {
+            if (!url) return '🔗';
+            try {
+                const domain = new URL(url).hostname;
+                return domain.charAt(0).toUpperCase();
+            } catch {
+                return '🔗';
+            }
+        }
+
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function togglePasswordVisibility(inputId) {
+            const input = document.getElementById(inputId);
+            if (input) {
+                input.type = input.type === 'password' ? 'text' : 'password';
+            }
+        }
+
+        function generatePassword() {
+            const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()_+-=[]{}|;:,.<>?';
+            let password = '';
+            
+            // Ensure complexity
+            password += 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[Math.floor(Math.random() * 26)];
+            password += 'abcdefghijklmnopqrstuvwxyz'[Math.floor(Math.random() * 26)];
+            password += '0123456789'[Math.floor(Math.random() * 10)];
+            password += '!@#$%^&*()_+-=[]{}|;:,.<>?'[Math.floor(Math.random() * 28)];
+            
+            // Fill to 16 characters
+            for (let i = 4; i < 16; i++) {
+                password += chars[Math.floor(Math.random() * chars.length)];
+            }
+            
+            // Shuffle
+            password = password.split('').sort(() => Math.random() - 0.5).join('');
+            
+            const passInput = document.getElementById('reg-password');
+            const confirmInput = document.getElementById('reg-confirm');
+            if (passInput && confirmInput) {
+                passInput.value = password;
+                confirmInput.value = password;
+                updatePasswordStrength();
+                showToast('Strong password generated', 'success');
+            }
+        }
+
+        function updatePasswordStrength() {
+            const password = document.getElementById('reg-password')?.value || '';
+            const meter = document.getElementById('password-strength');
+            if (!meter) return;
+            
+            let score = 0;
+            if (password.length >= 8) score += 1;
+            if (password.length >= 12) score += 1;
+            if (/[a-z]/.test(password)) score += 1;
+            if (/[A-Z]/.test(password)) score += 1;
+            if (/[0-9]/.test(password)) score += 1;
+            if (/[^a-zA-Z0-9]/.test(password)) score += 1;
+            
+            meter.className = 'strength-fill';
+            if (score >= 6) {
+                meter.classList.add('strength-strong');
+            } else if (score >= 4) {
+                meter.classList.add('strength-medium');
+            } else {
+                meter.classList.add('strength-weak');
+            }
+        }
+
+        function showModal(modalId) {
+            const modal = document.getElementById(modalId);
+            if (modal) {
+                modal.style.display = 'flex';
+            }
+        }
+
+        function hideModal(modalId) {
+            const modal = document.getElementById(modalId);
+            if (modal) {
+                modal.style.display = 'none';
+            }
+        }
+
+        function showAddPasswordModal() {
+            showModal('add-password-modal');
+        }
+
+        async function submitAddPassword() {
+            const passwordData = {
+                title: document.getElementById('add-title').value,
+                username: document.getElementById('add-username').value,
+                password: document.getElementById('add-password').value,
+                url: document.getElementById('add-url').value,
+                notes: document.getElementById('add-notes').value
+            };
+            
+            const success = await savePassword(passwordData);
+            if (success) {
+                hideModal('add-password-modal');
+                document.getElementById('add-password-form').reset();
+            }
+        }
+
+        function copyToClipboard(text, type) {
+            if (!text || text === 'Click to view') {
+                showToast('Password not available', 'warning');
+                return;
+            }
+            
+            navigator.clipboard.writeText(text).then(
+                () => showToast(`${type.charAt(0).toUpperCase() + type.slice(1)} copied`, 'success'),
+                () => showToast('Failed to copy', 'error')
+            );
+        }
+
+        function exportPasswords() {
+            showToast('Export feature coming soon', 'info');
+        }
+
+        function showImportModal() {
+            showToast('Import feature coming soon', 'info');
+        }
+
+        function showSettings() {
+            showToast('Settings feature coming soon', 'info');
+        }
+
+        function switchToLogin() {
+            document.querySelector('[data-tab="login"]').click();
+        }
+
+        // Initialize app
+        function init() {
+            const token = localStorage.getItem('token');
+            if (token) {
+                AppState.isLoggedIn = true;
+                renderDashboard();
+            } else {
+                renderAuth();
+            }
+            hideLoading();
+        }
+
+        // Start the app
+        document.addEventListener('DOMContentLoaded', init);
+        window.addEventListener('load', hideLoading);
+    </script>
+</body>
+</html>

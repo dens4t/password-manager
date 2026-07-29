@@ -1,0 +1,40 @@
+# Binaries
+securepass
+*.exe
+*.out
+*.app
+
+# Dependency directories
+node_modules/
+vendor/
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Log files
+*.log
+server.log
+tunnel.log
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
